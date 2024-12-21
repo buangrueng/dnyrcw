@@ -1,0 +1,121 @@
+from flask import Flask
+import threading
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram.ext import (
+    Updater,
+    CommandHandler,
+    MessageHandler,
+    CallbackQueryHandler,
+    ConversationHandler,
+    Filters,
+)
+import datetime
+
+TOKEN = "7504622631:AAG8GFL4nGeuqhQaELPVbNYvBALucUbFYCk"
+CHANNEL_USERNAME = "@dnyrcw"
+
+# 存储用户投稿时间
+user_post_time = {}
+
+# 创建 Flask 应用
+app = Flask('')
+
+@app.route('/')
+def home():
+    return "Bot is running!"
+
+def run():
+    app.run(host='0.0.0.0', port=8080)
+
+def keep_alive():
+    t = threading.Thread(target=run)
+    t.start()
+
+# 开始投稿对话
+def start(update: Update, context):
+    user = update.effective_user
+    chat_id = user.id
+    today = datetime.datetime.now().strftime("%Y-%m-%d")
+
+    # 检查用户是否已经投稿
+    if chat_id in user_post_time and user_post_time[chat_id] == today:
+        update.message.reply_text("您今天已经投稿过了，请明天再试！")
+        return ConversationHandler.END
+
+    # 提示投稿格式
+    update.message.reply_text(
+        "请发送您的求职自我介绍以及联系方式\n"
+        "格式：求职内容 ➕ @您的telegram用户名\n"
+        "——————————————————————\n"
+        "1.请确保内容为真实的求职信息\n"
+        "2.发布违规信息将导致列入黑名单"
+    )
+    return 1
+
+# 接收用户投稿
+def receive_post(update: Update, context):
+    context.user_data['post'] = update.message.text
+    keyboard = [
+        [
+            InlineKeyboardButton("确认投稿", callback_data="confirm"),
+            InlineKeyboardButton("取消投稿", callback_data="cancel"),
+        ]
+    ]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    update.message.reply_text(
+        f"请确认您的投稿内容：\n\n{update.message.text}",
+        reply_markup=reply_markup
+    )
+    return 2
+
+# 处理确认或取消
+def handle_confirmation(update: Update, context):
+    query = update.callback_query
+    query.answer()
+    user = update.effective_user
+    chat_id = user.id
+
+    if query.data == "confirm":
+        # 检查是否加入频道
+        member = context.bot.get_chat_member(CHANNEL_USERNAME, chat_id)
+        if member.status not in ["member", "administrator", "creator"]:
+            query.edit_message_text("请先加入我们的频道才能投稿！")
+            return ConversationHandler.END
+
+        # 记录投稿时间
+        today = datetime.datetime.now().strftime("%Y-%m-%d")
+        user_post_time[chat_id] = today
+
+        # 发送到频道
+        context.bot.send_message(chat_id=CHANNEL_USERNAME, text=context.user_data['post'])
+        query.edit_message_text("投稿成功，已发送到频道！")
+    elif query.data == "cancel":
+        query.edit_message_text("您已取消投稿！")
+    return ConversationHandler.END
+
+# 取消操作
+def cancel(update: Update, context):
+    update.message.reply_text("您已退出投稿流程！")
+    return ConversationHandler.END
+
+def main():
+    updater = Updater(TOKEN, use_context=True)
+    dp = updater.dispatcher
+
+    # 投稿对话流程
+    conv_handler = ConversationHandler(
+        entry_points=[CommandHandler("start", start)],
+        states={
+            1: [MessageHandler(Filters.text & ~Filters.command, receive_post)],
+            2: [CallbackQueryHandler(handle_confirmation)],
+        },
+        fallbacks=[CommandHandler("cancel", cancel)],
+    )
+
+    dp.add_handler(conv_handler)
+    updater.start_polling()
+    updater.idle()
+
+if __name__ == "__main__":
+    keep_alive()
+    main()
